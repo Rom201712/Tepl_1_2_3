@@ -195,19 +195,12 @@ void loop()
   slaveWiFi.task();
   heat.update();
   controlScada();
-  if (millis() > 20000)
-    if (!mb1108a.getErrorMB1108A())
+  if (millis() > 10000)
+    for (Teplica *t : arr_Tepl)
     {
-      for (Teplica *t : arr_Tepl)
-      {
-        if (pageNextion != "p3")
-          if (1 == t->getSensorStatus())
-            t->regulationPump(t->getTemperature());
-      }
-      for (Teplica *t : arr_Tepl)
-      {
-        t->updateWorkWindows();
-      }
+      if (1 == t->getSensorStatus() && !mb1108a.getErrorMB1108A())
+        t->regulationPump(t->getTemperature());
+      t->updateWorkWindows(!mb1108a.getErrorMB1108A());
     }
 
   if (SerialNextion.available())
@@ -241,7 +234,7 @@ void loop()
       pageNextion_p2();
     else if (pageNextion == "p3")
       pageNextion_p3();
-    updateNextion = millis() + 1000;
+    updateNextion = millis() + 200;
     digitalWrite(GPIO_NUM_2, !digitalRead(GPIO_NUM_2));
   }
 }
@@ -527,11 +520,11 @@ void saveOutModBusArr()
 {
   // для терминала
   slave.Hreg(rs485mode1, Tepl1.getMode() | Tepl1.getPump() << 2 | Tepl1.getHeat() << 3 | Tepl1.getSetPump() / 10 << 8);
-  slave.Hreg(rs485mode1, Tepl1.getLevel() | (Tepl1.getSetWindow() - Tepl1.getSetPump()) / 100 << 8);
+  slave.Hreg(rs485mode11, Tepl1.getLevel() | (Tepl1.getSetWindow() - Tepl1.getSetPump()) / 100 << 8);
   slave.Hreg(rs485mode2, Tepl2.getMode() | Tepl2.getPump() << 2 | Tepl2.getHeat() << 3 | Tepl2.getSetPump() / 10 << 8);
-  // slave.Hreg(rs485mode21, Tepl2.getSetPump() << 8);
+  slave.Hreg(rs485mode21, Tepl2.getLevel() | (Tepl2.getSetWindow() - Tepl2.getSetPump()) / 100 << 8);
   slave.Hreg(rs485mode3, Tepl3.getMode() | Tepl3.getPump() << 2 | Tepl3.getHeat() << 3 | Tepl3.getSetPump() / 10 << 8);
-  // slave.Hreg(rs485mode31, Tepl3.getSetPump() << 8);
+  slave.Hreg(rs485mode31, Tepl3.getLevel() | (Tepl3.getSetWindow() - Tepl3.getSetPump()) / 100 << 8);
   //  slave.Hreg(rs485mode7, Tepl_.getMode() | Tepl_.getPump() << 2 | Tepl_.getHeat() << 3 | Tepl_.getSetPump() / 10 << 8);
   //  slave.Hreg(rs485mode71, Tepl_.getLevel() | (Tepl_.getSetWindow() - Tepl_.getSetPump()) / 100 << 8);
   slave.Hreg(rs485temperature1, Tepl1.getTemperature() / 10);

@@ -50,7 +50,7 @@ const double BLUE = 1566;
 
 #define DEBUG_WIFI
 
-const String VER = "Ver - 2.0.0. Date - " + String(__DATE__) + "\r";
+const String VER = "Ver - 2.1.0. Date - " + String(__DATE__) + "\r";
 int IDSLAVE = 13; // адрес в сети Modbus
 
 

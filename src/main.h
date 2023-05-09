@@ -34,11 +34,11 @@ void webSerialSend(void *pvParameters);
 Preferences flash;
 AsyncWebServer server(80);
 
-// #define RXDNEX 23 // плата в теплице
-// #define TXDNEX 22 // плата в теплице
+#define RXDNEX 23 // плата в теплице
+#define TXDNEX 22 // плата в теплице
+// static const int RXDNEX = 19; // тестовая плата
+// static const int TXDNEX = 23; // тестовая плата
 
-static const int RXDNEX = 19; // тестовая плата
-static const int TXDNEX = 23; // тестовая плата
 #define RXDMASTER 25
 #define TXDMASTER 33
 
@@ -48,7 +48,7 @@ const double RED = 55688;
 const double GREEN = 2016;
 const double BLUE = 1566;
 
-#define nDEBUG_WIFI
+#define DEBUG_WIFI
 
 const String VER = "Ver - 2.0.0. Date - " + String(__DATE__) + "\r";
 int IDSLAVE = 13; // адрес в сети Modbus
@@ -59,9 +59,9 @@ String password = "zerNo32_";
 // String ssid = "Home-RP";
 // String password = "12rp1974";
 
-const double AIRTIME = 300000;
+const double AIRTIME = 600000;
 
-const uint TIME_UPDATE_GREENOOUSE = 6; // период регулировки окон теплиц, мин
+const uint TIME_UPDATE_GREENOOUSE = 4; // период регулировки окон теплиц, мин
 
 SoftwareSerial SerialNextion;
 Ticker tickerWiFiConnect;
@@ -229,9 +229,9 @@ MB1108A_ESP mb1108a = MB1108A_ESP(&mb_master, 101, 3);
 Heat heat = Heat(0, 1, 2, 3, &mbsl8di8ro);
 
 
-Teplica Tepl1 = Teplica(1, 0, 0, heat.getValve1(), 1, 2, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat); // id
-Teplica Tepl2 = Teplica(2, 1, 4, heat.getValve2(), 5, 6, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat, false);
-Teplica Tepl3 = Teplica(3, 2, 4, heat.getValve3(), 5, 6, 900, 700, 11000, 0, &mb1108a, &mbsl8di8ro, &heat, false);
+Teplica Tepl1 = Teplica(1, 0, 0, heat.getValve1(), 1, 2, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat);
+Teplica Tepl2 = Teplica(2, 1, 4, heat.getValve2(), 5, 6, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat);
+Teplica Tepl3 = Teplica(3, 2, 4, heat.getValve3(), 5, 6, 900, 700, 11000, 60000, &mb1108a, &mbsl8di8ro, &heat);
 
 Teplica *arr_Tepl[3];
 

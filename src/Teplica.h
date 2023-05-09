@@ -13,7 +13,7 @@ private:
     bool _there_are_windows = true;
     unsigned long _time_air, _time_decrease_in_humidity, _time_close_window;
     const uint32_t _WAITING_ON_PUMP = 300000;
-    const uint AIRLEVEL = 25;
+    const uint AIRLEVEL = 20;
     MB11016P_ESP *__relay = nullptr;
     // TypeMB16 *__relay = nullptr;
     MB1108A_ESP *__sensor = nullptr;
@@ -39,14 +39,7 @@ public:
         _oldtemperatute = setpump;
         _mode = AUTO;
     }
-    // конструктор для MB110_8A (блок датчиков) и MB110_16P (блок реле)
-    // номер температурного сенсора, номер релейного выхода, уставка, температурный модуль, релейный модульgas.getValve1(),
-    // Teplica(int id, int channel_t, int relayPump, int relayHeat, int setpump, int setheat, MB1108A_ESP *mb1108a, MB11016P_ESP *mb11016p, Gas *gas) : _id(id), _channel_t(channel_t), _relayPump(relayPump), _relayHeat(relayHeat), _setpump(setpump), _setheat(setheat), _hysteresis(20)
-    // {
-    //     __sensor = mb1108a;
-    //     __relay = mb11016p;
-    //     __heat. = gas;
-    // }
+  
     enum mode
     {
         AUTO,                // автоматический режим
@@ -227,7 +220,7 @@ public:
             __window->openWindow(AIRLEVEL - getLevel());
         }
     }
-    void updateWorkWindows()
+    void updateWorkWindows(bool err)
     {
         __window->off();
         if (_mode == AIR && _time_air < millis())
@@ -241,7 +234,8 @@ public:
         if (_mode == AIR || _mode == DECREASE_IN_HUMIDITY)
             if (getLevel() < AIRLEVEL)
                 __window->openWindow(AIRLEVEL - getLevel());
-        alarm();
+        if (err) 
+            alarm();
     }
     void alarm()
     {
@@ -253,6 +247,15 @@ public:
                     _mode = AUTO;
                 if (getTemperature() - _setwindow > 300)
                     _mode = AUTO;
+            }
+            return;
+        }
+        if (_mode == AIR || _mode == DECREASE_IN_HUMIDITY)
+        {
+            if (getTemperature() < _setheat + 100)
+            {
+                _mode = AUTO;
+                __window->closeWindow(getLevel());
             }
             return;
         }
@@ -297,7 +300,7 @@ public:
         return _hysteresis;
     }
 
-    void setMode(int mode) 
+    void setMode(int mode)
     {
         _mode = mode;
         if (_mode == AIR)

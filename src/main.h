@@ -4,32 +4,24 @@
 #define OFF LOW
 
 #include <WiFi.h>
-//#include <FS.h>
-//#include <SPIFFS.h>
-#include "Preferences.h"
-#include "SoftwareSerial.h"
-#include <ESP32Ticker.h>
+#include <SoftwareSerial.h>
 #include <Bounce2.h>
 #include <ModbusRTU.h>
 #include <ModbusIP_ESP8266.h>
-#include "MB11016P_ESP.h"
-#include "MB1108A_ESP.h"
 #include <WiFi.h>
 #include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
+#include "ESPAsyncWebServer.h"
+#include "Preferences.h"
 #include <AsyncElegantOTA.h>
+#include <freertos/task.h>
+#include <FreeRTOSConfig.h>
 
+#include "MB11016P_ESP.h"
+#include "MB1108A_ESP.h"
 #include "heat.h"
 #include "Teplica.h"
 #include "NEXTION.h"
-
-// #define USE_WEB_SERIAL
-
-#ifdef USE_WEB_SERIAL // использование web сервера для отладки
-#include <WebSerial.h>
-void recvMsg(uint8_t *data, size_t len);
-void webSerialSend(void *pvParameters);
-#endif
+#include "SoilSensor.h"
 
 Preferences flash;
 AsyncWebServer server(80);
@@ -41,8 +33,9 @@ AsyncWebServer server(80);
 
 #define RXDMASTER 25
 #define TXDMASTER 33
+#define MbMasterSerial Serial1
 
-//цвет на экране
+// цвет на экране
 const double LIGHT = 57048;
 const double RED = 55688;
 const double GREEN = 2016;
@@ -50,21 +43,23 @@ const double BLUE = 1566;
 
 #define DEBUG_WIFI
 
-const String VER = "Ver - 2.1.0. Date - " + String(__DATE__) + "\r";
+const String VER = "Ver - 3.0. Date - " + String(__DATE__) + "\r";
 int IDSLAVE = 13; // адрес в сети Modbus
 
+// String ssid = "yastrebovka";
+// String password = "zerNo32_";
+String ssid = "Home-RP";
+String password = "12rp1974";
 
-String ssid = "yastrebovka";
-String password = "zerNo32_";
-// String ssid = "Home-RP";
-// String password = "12rp1974";
+const uint32_t AIRTIME = 1200000; // длительность проветривания и осушения
 
-const double AIRTIME = 600000;
-
-const uint TIME_UPDATE_GREENOOUSE = 4; // период регулировки окон теплиц, мин
+const uint TIME_UPDATE_GREENOOUSE = 4;     // период регулировки окон теплиц, мин
+const uint TIME_UPDATE_MODBUS_MB110 = 5;   // период обновления данных для блока реле, сек
+const uint TIME_UPDATE_MODBUS_SENSOR = 20; // период обновления данных от датчиков, сек
+const uint TIME_UPDATE_WATER_SENSOR = 300;   // период обновления данных от датчиков температуры теплоносителя, сек
+const uint TIME_UPDATE_HMI = 200;         // период обновления данных на дисплее, мсек
 
 SoftwareSerial SerialNextion;
-Ticker tickerWiFiConnect;
 
 enum
 {
@@ -107,6 +102,12 @@ enum
   WiFiLevel1,          //  уровень открытия окна теплица 1
   WiFiHysteresis1,     // гистерезис насосов теплица 1
   WiFiOpenTimeWindow1, // время открытия окон теплица 1
+  WiFiSoilSensorT1,    //  температура почвы 1
+  WiFiSoilSensorH1,    //  влажность почвы 1
+  WiFiSoilSensorC1,    //  Conductivity(EC) проводимость почвы 1
+  WiFiSoilSensorS1,   //  salinity соленость почвы 1
+  WiFiSoilSensorTDS1,    //  TDS почвы 1
+
 
   WiFimode2,          //  режим работы теплица 2
   WiFipump2,          //  насос 2
@@ -120,6 +121,11 @@ enum
   WiFiLevel2,         //  уровень открытия окна теплица 2
   WiFiHysteresis2,    // гистерезис насосов теплица 2
   WiFiOpenTimeWindow, // время открытия окон теплица 2
+  WiFiSoilSensorT2,    //  температура почвы 2
+  WiFiSoilSensorH2,    //  влажность почвы 2
+  WiFiSoilSensorC2,    //  Conductivity(EC) проводимость почвы 2
+  WiFiSoilSensorS2,   //  salinity соленость почвы 2
+  WiFiSoilSensorTDS2,    //  TDS почвы 2
 
   WiFimode3,           //  режим работы теплица 3
   WiFipump3,           //  насос 3
@@ -133,21 +139,13 @@ enum
   WiFiLevel3,          //  уровень открытия окна теплица 3
   WiFiHysteresis3,     // гистерезис насосов теплица 3
   WiFiOpenTimeWindow3, // время открытия окон теплица 3
+  WiFiSoilSensorT3,    //  температура почвы 2
+  WiFiSoilSensorH3,    //  влажность почвы 2
+  WiFiSoilSensorC3,    //  Conductivity(EC) проводимость почвы 2
+  WiFiSoilSensorS3,   //  salinity соленость почвы 2
+  WiFiSoilSensorTDS3,    //  TDS почвы 2
 
-  WiFimode7,           //  режим работы теплица _
-  WiFipump7,           //  насос _
-  WiFiheat7,           //  доп. нагреватель _
-  WiFisetpump7,        //  уставка теплица 1
-  WiFisetheat7,        //  уставка доп.нагрветель 1
-  WiFisetwindow7,      //  уставка окна теплица 1
-  WiFitemperature7,    //  температура в теплиц _
-  WiFihumidity7,       //  влажность теплица _
-  WiFierror7,          //  ошибки теплица _
-  WiFiLevel7,          //  уровень открытия окна теплица _
-  WiFiHysteresis7,     // гистерезис насосов теплица _
-  WiFiOpenTimeWindow7, // время открытия окон теплица _
-
-  WiFi_HOLDING_REGS_SIZE  //  leave this one
+  WiFi_HOLDING_REGS_SIZE //  leave this one
 };
 
 enum
@@ -217,17 +215,13 @@ ModbusRTU slave;
 ModbusIP slaveWiFi;
 ModbusRTU mb_master;
 
-
-bool mb11016[17] = {};
-bool mb11016_h[17] = {};
-
-
-MB11016P_ESP mb11016p = MB11016P_ESP(&mb_master, 100, mb11016);
-MB11016P_ESP mbsl8di8ro = MB11016P_ESP(&mb_master, 102, mb11016_h); //китайский блок реле (для управления пушкой и тепл.3)
+MB11016P_ESP mb11016p = MB11016P_ESP(&mb_master, 100, 0);
+MB11016P_ESP mbsl8di8ro = MB11016P_ESP(&mb_master, 102, 0); // китайский блок реле (для управления пушкой и тепл.3)
 
 MB1108A_ESP mb1108a = MB1108A_ESP(&mb_master, 101, 3);
 Heat heat = Heat(0, 1, 2, 3, &mbsl8di8ro);
 
+SoilSensor soil1(&mb_master, 1);
 
 Teplica Tepl1 = Teplica(1, 0, 0, heat.getValve1(), 1, 2, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat);
 Teplica Tepl2 = Teplica(2, 1, 4, heat.getValve2(), 5, 6, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat);
@@ -235,10 +229,8 @@ Teplica Tepl3 = Teplica(3, 2, 4, heat.getValve3(), 5, 6, 900, 700, 11000, 60000,
 
 Teplica *arr_Tepl[3];
 
-Nextion displNext = Nextion(SerialNextion);
+Nextion hmi(SerialNextion);
 
-void readNextion();
-void analyseString(String incStr);
 // void pageNextion_p0();
 void pageNextion_p1(int i);
 void pageNextion_p2();
@@ -252,12 +244,13 @@ void indiGas();
 void pars_str_adr(String &str);
 void pars_str_set(String &str);
 void saveOutModBusArr();
-void update_mbmaster();
-void update_WiFiConnect();
 void controlScada();
 String calculateTimeWork();
 
 void updateGreenHouse(void *pvParameters);
-void updateDateSensor(void *pvParameters);
-
+void updateMB(void *pvParameters);
+void update_WiFiConnect(void *pvParameters);
+void sendNextion(void *pvParameters);
+void readNextion(void *pvParameters);
+void onHMIEvent(String messege, String data, String response);
 

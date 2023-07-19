@@ -2,18 +2,19 @@
 // #include <vector.h>
 
 #pragma once
+#include "Arduino.h"
 
 class Heat
 {
 
 private:
-    int relay_heat_, gate_valve1_, gate_valve2_, gate_valve3_;
+    int relay_heat_ = 0, gate_valve1_ = 1, gate_valve2_ = 2, gate_valve3_ = 3;
 
-    unsigned long time_power_off_;
+    unsigned long time_power_off_ = 0;
     const uint32_t TIME_WAITING_OFF_ = 900000;
     MB11016P_ESP *relay__;
-    std::vector<int> queleOn;
-    std::vector<int> queleOff;
+    std::vector<int> queleOn{0};
+    std::vector<int> queleOff{0};
 
 public:
     Heat(int relay_heat, int gate_valve1, int gate_valve2, int gate_valve3, MB11016P_ESP *mb11016p) : relay_heat_(relay_heat), gate_valve1_(gate_valve1),

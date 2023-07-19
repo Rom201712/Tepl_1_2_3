@@ -1,4 +1,3 @@
-
 #include "main.h"
 #include <TimeUtil.h>
 
@@ -8,8 +7,10 @@ void setup()
 
   Serial.begin(115200);
   Serial.print(__DATE__);
+  hmi.echoEnabled(false);
+  hmi.hmiCallBack(onHMIEvent);
 
-  displNext("rest");
+  hmi("rest");
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), password.c_str());
@@ -41,10 +42,6 @@ void setup()
 
   AsyncElegantOTA.begin(&server); // Start ElegantOTA
   server.begin();
-#ifdef USE_WEB_SERIAL
-  WebSerial.begin(&server);
-  WebSerial.msgCallback(recvMsg);
-#endif
 
 #ifdef DEBUG_WIFI
   if (WiFi.status() == WL_CONNECTED)
@@ -105,9 +102,9 @@ void setup()
 #endif
 
   flash.begin("eerom", false);
-  Serial1.begin(flash.getInt("mspeed", 19200), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
-  Serial2.begin(flash.getInt("sspeed", 19200));                                          // Modbus Slave
-  SerialNextion.begin(19200, SWSERIAL_8N1, RXDNEX, TXDNEX, false);
+  MbMasterSerial.begin(flash.getInt("mspeed", 19200), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
+  Serial2.begin(flash.getInt("sspeed", 19200));                                                 // Modbus Slave
+  SerialNextion.begin(38400, SWSERIAL_8N1, RXDNEX, TXDNEX, false);
 
   mbsl8di8ro.setAdress(flash.getInt("heat_adr", 102));
 
@@ -118,7 +115,7 @@ void setup()
   slaveWiFi.slave(IDSLAVE);
   slaveWiFi.begin();
 
-  mb_master.begin(&Serial1);
+  mb_master.begin(&MbMasterSerial);
   mb_master.master();
 
   for (int i = rs485mode1; i < rs485_HOLDING_REGS_SIZE; i++)
@@ -155,16 +152,41 @@ void setup()
   Tepl2.setWindowlevel(-100);
   Tepl3.setWindowlevel(-100);
 
-  tickerWiFiConnect.attach_ms(600000, update_WiFiConnect); // таймер проверки соединения WiFi (раз в 10 минут)
+  xTaskCreatePinnedToCore(
+      update_WiFiConnect,        /* Обновление WiFi */
+      "Task_update_WiFiConnect", /* Название задачи */
+      4096,                      /* Размер стека задачи */
+      NULL,                      /* Параметр задачи */
+      1,                         /* Приоритет задачи */
+      NULL,                      /* Идентификатор задачи, чтобы ее можно было отслеживать */
+      0);           /* Ядро для выполнения задачи (0) */
 
   xTaskCreatePinnedToCore(
-      updateDateSensor,        /* Запрос по Modbus по  сети RS485 */
-      "Task_updateDateSensor", /* Название задачи */
-      10000,                   /* Размер стека задачи */
-      NULL,                    /* Параметр задачи */
-      10,                      /* Приоритет задачи */
-      &Task_updateDateSensor,  /* Идентификатор задачи, чтобы ее можно было отслеживать */
-      0);                      /* Ядро для выполнения задачи (0) */
+      updateMB,        /* Обновление состояния реле блока MB110 */
+      "Task_updateMB", /* Название задачи */
+      4096,            /* Размер стека задачи */
+      NULL,            /* Параметр задачи */
+      3,               /* Приоритет задачи */
+      NULL,            /* Идентификатор задачи, чтобы ее можно было отслеживать */
+      tskNO_AFFINITY); /* Ядро для выполнения задачи (0) */
+
+  xTaskCreatePinnedToCore(
+      sendNextion,        /* обновление данных HMI */
+      "Task_sendNextion", /* Название задачи */
+      8192,               /* Размер стека задачи */
+      NULL,               /* Параметр задачи */
+      4,                  /* Приоритет задачи */
+      NULL,               /* Идентификатор задачи, чтобы ее можно было отслеживать */
+      1);
+
+  xTaskCreatePinnedToCore(
+      readNextion,        /* чтение данных от HMI */
+      "Task_readNextion", /* Название задачи */
+      8192,               /* Размер стека задачи */
+      NULL,               /* Параметр задачи */
+      2,                  /* Приоритет задачи */
+      NULL,               /* Идентификатор задачи, чтобы ее можно было отслеживать */
+      tskNO_AFFINITY);
 
   updateNextion = millis();
 
@@ -175,25 +197,14 @@ void setup()
       NULL,                    /* Параметр задачи */
       2,                       /* Приоритет задачи */
       &Task_updateGreenHouse,  /* Идентификатор задачи, чтобы ее можно было отслеживать */
-      0);
-
-#ifdef USE_WEB_SERIAL
-  xTaskCreatePinnedToCore(
-      webSerialSend,        /* */
-      "Task_wedSerialSend", /* Название задачи */
-      10000,                /* Размер стека задачи */
-      NULL,                 /* Параметр задачи */
-      4,                    /* Приоритет задачи */
-      &Task_webSerialSend,  /* Идентификатор задачи, чтобы ее можно было отслеживать */
-      1);
-#endif
+      tskNO_AFFINITY);
 }
 void loop()
 {
   saveOutModBusArr();
   slave.task();
   slaveWiFi.task();
-  heat.update();
+  // heat.update();
   controlScada();
   if (millis() > 10000)
     for (Teplica *t : arr_Tepl)
@@ -202,19 +213,28 @@ void loop()
         t->regulationPump(t->getTemperature());
       t->updateWorkWindows(!mb1108a.getErrorMB1108A());
     }
+}
 
-  if (SerialNextion.available())
-    readNextion();
-
-  if (millis() > updateNextion)
+void readNextion(void *pvParameters)
+{
+  for (;;)
   {
-    long t = millis();
+    hmi.listen();
+    // vPrintString("readNextion");
+    // vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(TIME_UPDATE_HMI));
+    vTaskDelay(pdMS_TO_TICKS(TIME_UPDATE_HMI));
+  }
+  vTaskDelete(NULL);
+}
+
+void sendNextion(void *pvParameters)
+{
+  for (;;)
+  {
     if (pageNextion == "p0")
     {
+      // TimingUtil test("p0"); // тестирование времени вывода
       coun1 = 0;
-
-      // TimingUtil test("indi_p0"); //тестирование времени вывода
-
       // вывод данных теплицы 1
       indiTepl1();
       // вывод данных теплицы 2
@@ -225,7 +245,10 @@ void loop()
       indiGas();
     }
     else if (pageNextion == "p1_0")
+    {
       pageNextion_p1(0);
+      // TimingUtil test("p1_0"); //тестирование времени вывода
+    }
     else if (pageNextion == "p1_1")
       pageNextion_p1(1);
     else if (pageNextion == "p1_2")
@@ -234,48 +257,34 @@ void loop()
       pageNextion_p2();
     else if (pageNextion == "p3")
       pageNextion_p3();
-    updateNextion = millis() + 200;
     digitalWrite(GPIO_NUM_2, !digitalRead(GPIO_NUM_2));
+    // vPrintString("sendNextion");
+    // vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(TIME_UPDATE_HMI));
+    vTaskDelay(pdMS_TO_TICKS(TIME_UPDATE_HMI));
   }
+  vTaskDelete(NULL);
 }
 
-// данные с Nextion
-void readNextion()
-{
-  char inc;
-  String incStr = "";
-  while (SerialNextion.available())
-  {
-    inc = SerialNextion.read();
-    // Serial.print(inc);
-    incStr += inc;
-    if (inc == 0x23)
-      incStr = "";
-    if (inc == '\n')
-    {
-      if (incStr != "" || incStr.length() > 2)
-      {
-        analyseString(incStr);
-      }
-      return;
-    }
-    delay(10);
-  }
-}
-
-// получение данных от датчиков температуры
-void updateDateSensor(void *pvParameters)
+// получение данных от датчиков и управление блоками реле
+void updateMB(void *pvParameters)
 {
   for (;;)
   {
     mb1108a.read();
-    update_mbmaster();
-
+    // TimingUtil test("updatmb1108"); //тестирование времени вывода
+  
     mb11016p.write();
-    update_mbmaster();
-
     mbsl8di8ro.write();
-    update_mbmaster();
+
+    // скорость шины датчика почвы
+    // MbMasterSerial.end();
+    // MbMasterSerial.begin(4800, SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
+  
+      soil1.read();
+  
+    // MbMasterSerial.end();
+    // MbMasterSerial.begin(flash.getInt("mspeed", 19200), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
+
 
     if (!mb1108a.getErrorMB1108A())
     {
@@ -292,160 +301,129 @@ void updateDateSensor(void *pvParameters)
         Tepl3.setTemperature();
       }
     }
-    vTaskDelay(TIME_UPDATE_MODBUS / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(TIME_UPDATE_MODBUS));
   }
+  vTaskDelete(NULL);
 }
 
 // парсинг полученых данных от дисплея Nextion
-void analyseString(String incStr)
+// Event Occurs when response comes from HMI
+void onHMIEvent(String messege, String data, String response)
 {
-  // Serial.printf("\nNextion send - %s\n", incStr);
-  for (int i = 0; i < incStr.length(); i++)
+
+  if (messege == "page0") //
   {
-    if (incStr.substring(i).startsWith("page0")) //
-      pageNextion = "p0";
-    if (incStr.substring(i).startsWith("pageSet")) //
-    {
-      uint16_t temp = uint16_t(incStr.substring(i + 7, i + 8).toInt());
-      if (temp == Tepl1.getId())
-        pageNextion = "p1_0";
-      if (temp == Tepl2.getId())
-        pageNextion = "p1_1";
-      if (temp == Tepl3.getId())
-        pageNextion = "p1_2";
-    }
-    if (incStr.substring(i).startsWith("page2")) //
-      pageNextion = "p2";
-    if (incStr.substring(i).startsWith("page3")) //
-    {
-      pageNextion = "p3";
-    }
+    pageNextion = "p0";
+    return;
+  }
+  else if (messege == "pageSet") //
+  {
+    if (data.toInt() == Tepl1.getId())
+      pageNextion = "p1_0";
+    if (data.toInt() == Tepl2.getId())
+      pageNextion = "p1_1";
+    if (data.toInt() == Tepl3.getId())
+      pageNextion = "p1_2";
+    return;
+  }
+  else if (messege == "page2") //
+  {
+    pageNextion = "p2";
+    return;
+  }
+  else if (messege == "page3") //
+  {
+    pageNextion = "p3";
+    return;
+  }
 
-    if (incStr.substring(i).startsWith("m1")) //  переключение режим теплица 1 автомат - ручной
-    {
-      Tepl1.setMode(Tepl1.getMode() == Teplica::AUTO ? Teplica::MANUAL : Teplica::AUTO);
-      return;
-    }
-    if (incStr.substring(i).startsWith("m2")) //
-    {
-      Tepl2.setMode(Tepl2.getMode() == Teplica::AUTO ? Teplica::MANUAL : Teplica::AUTO);
-      return;
-    }
-    if (incStr.substring(i).startsWith("m3")) //
-    {
-      Tepl3.setMode(Tepl3.getMode() == Teplica::AUTO ? Teplica::MANUAL : Teplica::AUTO);
-      return;
-    }
-    if (incStr.substring(i).startsWith("w1")) //  переключение режим теплица 1 проветривание
-    {
-      Tepl1.setMode(Teplica::AIR);
-      return;
-    }
-    if (incStr.substring(i).startsWith("w2")) //  переключение режим теплица 2 проветривание
-    {
-      Tepl2.setMode(Teplica::AIR);
-      return;
-    }
-    if (incStr.substring(i).startsWith("w3")) //  переключение режим теплица 3 проветривание
-    {
-      Tepl3.setMode(Teplica::AIR);
-      return;
-    }
-    if (incStr.substring(i).startsWith("dh1")) //  переключение режим теплица 1 осушение
-    {
-      Tepl1.setMode(Teplica::DECREASE_IN_HUMIDITY);
-      return;
-    }
-    if (incStr.substring(i).startsWith("dh2")) //  переключение режим теплица 2 осушение
-    {
-      Tepl2.setMode(Teplica::DECREASE_IN_HUMIDITY);
-      return;
-    }
-    if (incStr.substring(i).startsWith("dh3")) //  переключение режим теплица 3 осушение
-    {
-      Tepl3.setMode(Teplica::DECREASE_IN_HUMIDITY);
-      return;
-    }
+  else if (messege == "m") //  переключение режим теплица - автомат / ручной
+  {
+    arr_Tepl[data.toInt() - 1]->setMode(arr_Tepl[data.toInt() - 1]->getMode() == Teplica::AUTO ? Teplica::MANUAL : Teplica::AUTO);
+    return;
+  }
 
-    if (incStr.substring(i).startsWith("pump1")) //
-    {
-      Tepl1.setPump(Tepl1.getPump() ? OFF : ON);
-      return;
-    }
-    if (incStr.substring(i).startsWith("pump2")) //
-    {
-      Tepl2.setPump(Tepl2.getPump() ? OFF : ON);
-      return;
-    }
-    if (incStr.substring(i).startsWith("pump3")) //
-    {
-      Tepl3.setPump(Tepl3.getPump() ? OFF : ON);
-      return;
-    }
+  else if (messege == "w") //  переключение режим теплица - проветривание
+  {
+    arr_Tepl[data.toInt() - 1]->setMode(Teplica::AIR);
+    return;
+  }
 
-    if (incStr.substring(i).startsWith("val1")) //
-    {
-      heat.setRelay(heat.getValve1(), heat.getStatusRelay(heat.getValve1()) ? OFF : ON);
-      return;
-    }
-    if (incStr.substring(i).startsWith("val2")) //
-    {
-      heat.setRelay(heat.getValve2(), heat.getStatusRelay(heat.getValve2()) ? OFF : ON);
-      return;
-    }
-    if (incStr.substring(i).startsWith("val3")) //
-    {
-      heat.setRelay(heat.getValve3(), heat.getStatusRelay(heat.getValve3()) ? OFF : ON);
-      return;
-    }
+  else if (messege == "dh") //  переключение режим теплиц - осушение
+  {
+    arr_Tepl[data.toInt() - 1]->setMode(Teplica::DECREASE_IN_HUMIDITY);
+    return;
+  }
 
-    // тестирование работы задвижек
-    if (incStr.substring(i).startsWith("tval1")) //
-    {
-      heat.setTestRelay(heat.getValve1(), heat.getStatusRelay(heat.getValve1()) ? OFF : ON);
-      return;
-    }
-    if (incStr.substring(i).startsWith("tval2")) //
-    {
-      heat.setTestRelay(heat.getValve2(), heat.getStatusRelay(heat.getValve2()) ? OFF : ON);
-      return;
-    }
-    if (incStr.substring(i).startsWith("tval3")) //
-    {
-      heat.setTestRelay(heat.getValve3(), heat.getStatusRelay(heat.getValve3()) ? OFF : ON);
-      return;
-    }
+  else if (messege == "pump") //
+  {
+    arr_Tepl[data.toInt() - 1]->setPump(!arr_Tepl[data.toInt() - 1]->getPump());
+    return;
+  }
 
-    if (incStr.substring(i).startsWith("set")) //
-    {
-      pars_str_set(incStr);
-      return;
-    }
-    if (incStr.substring(i).startsWith("adr")) //
-    {
-      pars_str_adr(incStr);
-      flash.putString("adr", incStr);
-    }
-    if (incStr.substring(i).startsWith("ss")) // изменение скорости шины связи с терминалом
-    {
-      uint16_t temp = uint16_t(incStr.substring(i + 2, i + 7).toInt());
-      flash.putInt("sspeed", temp);
-      Serial2.end();
-      Serial2.begin(temp); // Modbus Slave
-    }
-    if (incStr.substring(i).startsWith("ms")) // изменение скорости шины связи с контроллером реле и контроллером датчиков
-    {
-      uint16_t temp = uint16_t(incStr.substring(i + 2, i + 7).toInt());
-      flash.putInt("mspeed", temp);
-      Serial1.end();
-      Serial1.begin(flash.getInt("mspeed", 2400), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
-    }
-    if (incStr.substring(i).startsWith("heat_adr")) // изменение скорости шины связи с контроллером реле и контроллером датчиков
-    {
-      uint16_t temp = uint16_t(incStr.substring(i + 8).toInt());
-      flash.putInt("heat_adr", temp);
-      mbsl8di8ro.setAdress(temp);
-    }
+  // else if (messege == "val1") //
+  // {
+  //   heat.setRelay(heat.getValve1(), heat.getStatusRelay(heat.getValve1()) ? OFF : ON);
+  //   return;
+  // }
+  // else if (messege == "val2") //
+  // {
+  //   heat.setRelay(heat.getValve2(), heat.getStatusRelay(heat.getValve2()) ? OFF : ON);
+  //   return;
+  // }
+  // else if (messege == "val3") //
+  // {
+  //   heat.setRelay(heat.getValve3(), heat.getStatusRelay(heat.getValve3()) ? OFF : ON);
+  //   return;
+  // }
+
+  // тестирование работы задвижек
+  else if (messege == "tval1") //
+  {
+    heat.setTestRelay(heat.getValve1(), heat.getStatusRelay(heat.getValve1()) ? OFF : ON);
+    return;
+  }
+  else if (messege == "tval2") //
+  {
+    heat.setTestRelay(heat.getValve2(), heat.getStatusRelay(heat.getValve2()) ? OFF : ON);
+    return;
+  }
+  else if (messege == "tval3") //
+  {
+    heat.setTestRelay(heat.getValve3(), heat.getStatusRelay(heat.getValve3()) ? OFF : ON);
+    return;
+  }
+
+  else if (messege == "set") //
+  {
+    pars_str_set(data);
+    return;
+  }
+  else if (messege == "adr") //
+  {
+    pars_str_adr(data);
+    flash.putString("adr", data);
+    return;
+  }
+  else if (messege == "ss") // изменение скорости шины связи с терминалом
+  {
+    flash.putInt("sspeed", data.toInt());
+    Serial2.end();
+    Serial2.begin(data.toInt()); // Modbus Slave
+    return;
+  }
+  else if (messege == "ms") // изменение скорости шины связи с контроллером реле и контроллером датчиков
+  {
+    flash.putInt("mspeed", data.toInt());
+    MbMasterSerial.end();
+    MbMasterSerial.begin(flash.getInt("mspeed", 2400), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
+    return;
+  }
+  else if (messege == "heat_adr") // изменение скорости шины связи с контроллером реле и контроллером датчиков
+  {
+    flash.putInt("heat_adr", data.toInt());
+    mbsl8di8ro.setAdress(data.toInt());
+    return;
   }
 }
 
@@ -453,9 +431,9 @@ void pars_str_set(String &str)
 {
   int j = 0;
   String st = "";
-  for (int i = 3; i < str.length(); i++)
+  for (int i = 0; i < str.length(); i++)
   {
-    if (str.charAt(i) == '.' || str.charAt(i) == '\n')
+    if (str.charAt(i) == '.')
     {
       arr_set[j] = st.toInt();
       // Serial.println(arr_set[j]);
@@ -485,9 +463,12 @@ void pars_str_adr(String &str)
 {
   int j = 0;
   String st = "";
-  for (int i = 3; i < str.length(); i++)
+  if (str.isEmpty())
+    return;
+
+  for (int i = 0; i < str.length(); i++)
   {
-    if (str.charAt(i) == '.' || str.charAt(i) == '\n')
+    if (str.charAt(i) == '.')
     {
       arr_adr[j] = st.toInt();
       // Serial.println(arr_adr[j]);
@@ -498,21 +479,21 @@ void pars_str_adr(String &str)
       st += str.charAt(i);
   }
   Tepl1.setAdress(arr_adr[0]);
-  displNext("p2.n0.val", arr_adr[0]);
+  hmi("p2.n0.val", arr_adr[0]);
   Tepl1.setCorrectionTemp(10 * arr_adr[1]);
-  displNext("p2.t0.txt", String(arr_adr[1]));
+  hmi("p2.t0.txt", String(arr_adr[1]));
   Tepl2.setAdress(arr_adr[2]);
-  displNext("p2.n1.val", arr_adr[2]);
+  hmi("p2.n1.val", arr_adr[2]);
   Tepl2.setCorrectionTemp(10 * arr_adr[3]);
-  displNext("p2.t1.txt", String(arr_adr[3]));
+  hmi("p2.t1.txt", String(arr_adr[3]));
   Tepl3.setAdress(arr_adr[4]);
-  displNext("p2.n2.val", arr_adr[4]);
+  hmi("p2.n2.val", arr_adr[4]);
   Tepl3.setCorrectionTemp(10 * arr_adr[5]);
-  displNext("p2.t2.txt", String(arr_adr[5]));
+  hmi("p2.t2.txt", String(arr_adr[5]));
   mb1108a.setAdress(arr_adr[10]);
-  displNext("p2.n4.val", arr_adr[10]);
+  hmi("p2.n4.val", arr_adr[10]);
   mb11016p.setAdress(arr_adr[11]);
-  displNext("p2.n5.val", arr_adr[11]);
+  hmi("p2.n5.val", arr_adr[11]);
 }
 
 // заполнение таблицы для передачи (протокол Modbus)
@@ -549,37 +530,36 @@ void saveOutModBusArr()
     slaveWiFi.Ireg(WiFisetheat1 + i, t->getSetHeat());
     slaveWiFi.Ireg(WiFiHysteresis1 + i, t->getHysteresis());
     slaveWiFi.Ireg(WiFiOpenTimeWindow1 + i, t->getOpenTimeWindow());
-    i += 12;
+    i += 17;
   }
+  slaveWiFi.Ireg(WiFiSoilSensorT1, soil1.getTemperature());
+  slaveWiFi.Ireg(WiFiSoilSensorH1, soil1.getHumidity());
+  slaveWiFi.Ireg(WiFiSoilSensorC1, soil1.getConductivity());
+  slaveWiFi.Ireg(WiFiSoilSensorS1, soil1.getSalinity());
+  slaveWiFi.Ireg(WiFiSoilSensorTDS1, soil1.getTDS());
 }
 
-void update_mbmaster()
-{
-  unsigned long t = millis() + 420;
-  while (t > millis())
-  {
-    mb_master.task();
-    yield();
-    // delay(5);
-  }
-}
-void update_WiFiConnect()
+void update_WiFiConnect(void *pvParameters)
 {
   /*----настройка Wi-Fi---------*/
-  int counter_WiFi = 0;
-
-  while (WiFi.status() != WL_CONNECTED && counter_WiFi < 10)
+  for (;;)
   {
-    WiFi.disconnect();
-    WiFi.reconnect();
-    // Serial.println("Reconecting to WiFi..");
-    counter_WiFi++;
-    delay(1000);
+    int counter_WiFi = 0;
+    while (WiFi.status() != WL_CONNECTED && counter_WiFi < 10)
+    {
+      WiFi.disconnect();
+      WiFi.reconnect();
+      // Serial.println("Reconecting to WiFi..");
+      counter_WiFi++;
+      delay(1000);
+    }
+    // if (WiFi.status() == WL_CONNECTED)
+    //   Serial.printf("Connect to:\t%s\n", ssid);
+    // else
+    //   Serial.printf("Dont connect to: %s\n", ssid);
+    vTaskDelay(pdMS_TO_TICKS(10 * 60 * 1000));
   }
-  if (WiFi.status() == WL_CONNECTED)
-    Serial.printf("Connect to:\t%s\n", ssid);
-  else
-    Serial.printf("Dont connect to: %s\n", ssid);
+  vTaskDelete(NULL);
 }
 
 /*--------------------------------------- изменения параметров с компьютера ------------------------------------*/
@@ -643,27 +623,6 @@ void controlScada()
   flash.putUInt(String("Opentwin" + String(arr_Tepl[number]->getId())).c_str(), slave.Hreg(wifi_time_open_windows_1 + k));
 }
 
-#ifdef USE_WEB_SERIAL
-void webSerialdisplay(void *pvParameters)
-{
-  for (;;)
-  {
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
-  }
-}
-
-void recvMsg(uint8_t *data, size_t len)
-{
-  WebSerial.println("Received Data...");
-  String d = "";
-  for (int i = 0; i < len; i++)
-  {
-    d += char(data[i]);
-  }
-  WebSerial.println(d);
-}
-#endif
-
 String calculateTimeWork()
 {
   String str = "\nDuration of work: ";
@@ -710,7 +669,7 @@ void updateGreenHouse(void *pvParameters)
       if (level_window_tmp != t->getLevel())
       {
         flash.putUInt(String("LevelWindow" + String(t->getId())).c_str(), t->getLevel()); // запись уровня открытия окна при его изменении.
-        Serial.printf("\nТеплица %d : %d", t->getId(), t->getLevel());
+        // Serial.printf("\nТеплица %d : %d", t->getId(), t->getLevel());
       }
     }
     vTaskDelay(TIME_UPDATE_GREENOOUSE * 60 * 1000 / portTICK_PERIOD_MS);
@@ -720,233 +679,52 @@ void updateGreenHouse(void *pvParameters)
 // вывод данных теплицы 1
 void indiTepl1()
 {
-  if (!mb1108a.getErrorMB1108A())
-  { // ввывод температуры и ошибок датчика температуры
-    if (1 == Tepl1.getSensorStatus())
-    {
-      displNext("p0.t0.font", 5);
-      displNext("p0.t0.txt", String(Tepl1.getTemperature() / 100.0, 1));
-      if (Tepl1.getTemperature() < Tepl1.getSetHeat())
-        displNext("p0.t0.pco", BLUE);
-      else if (Tepl1.getTemperature() > Tepl1.getSetPump() + 300)
-        displNext("p0.t0.pco", RED);
-      else
-        displNext("p0.t0.pco", GREEN);
-    }
-    else
-    {
-      displNext("p0.t0.pco", LIGHT);
-      displNext("p0.t0.font", 1);
-      displNext("p0.t0.txt", "Er " + String(Tepl1.getSensorStatus(), HEX));
-    }
-  }
-  else
-  {
-    displNext("p0.t0.pco", RED);
-    displNext("p0.t0.font", 1);
-    displNext("p0.t0.txt", "Er 108");
-  }
-  // вывод уставки насос
-  displNext("p0.x1.val", Tepl1.getSetPump() / 10);
-  // вывод уставки дополнительный обогреватель
-  displNext("p0.x2.val", Tepl1.getSetHeat() / 10);
-  // вывод уставки окно
-  displNext("p0.x3.val", Tepl1.getSetWindow() / 10);
-  // вывод режима работы
-  if (Tepl1.getMode() == Teplica::MANUAL)
-    displNext("p0.t3.txt", "M");
-  if (Tepl1.getMode() == Teplica::AUTO)
-    displNext("p0.t3.txt", "A");
-  if (Tepl1.getMode() == Teplica::AIR)
-    displNext("p0.t3.txt", "W");
-  if (Tepl1.getMode() == Teplica::DECREASE_IN_HUMIDITY)
-    displNext("p0.t3.txt", "H");
-  // идикация состояния насоса
-  displNext("p0.p1.pic", Tepl1.getPump() ? 12 : 11);
-  // идикация состояния дополнительного обогревателя (задвижка)
-  displNext("p0.p2.pic", Tepl1.getHeat() && heat.getSatusHeat() ? 12 : 11);
-  // вывод уровня открытия окон
-  displNext("p0.h0.val", Tepl1.getLevel());
+  hmi.inditepl1(Tepl1, heat, mb1108a);
 }
 
 // вывод данных теплицы 2
 void indiTepl2()
 {
-  if (!mb1108a.getErrorMB1108A())
-  {
-    // ввывод температуры и ошибок датчика температуры
-    if (1 == Tepl2.getSensorStatus())
-    {
-      displNext("p0.t7.font", 5);
-      displNext("p0.t7.txt", String(Tepl2.getTemperature() / 100.0, 1));
-      if (Tepl2.getTemperature() < Tepl2.getSetHeat())
-        displNext("p0.t7.pco", BLUE);
-      else if (Tepl2.getTemperature() > Tepl2.getSetPump() + 300)
-        displNext("p0.t7.pco", RED);
-      else
-        displNext("p0.t7.pco", GREEN);
-    }
-    else
-    {
-      displNext("p0.t7.pco", LIGHT);
-      displNext("p0.t7.font", 1);
-      displNext("p0.t7.txt", "Er " + String(Tepl2.getSensorStatus(), HEX));
-    }
-  }
-  else
-  {
-    displNext("p0.t7.pco", RED);
-    displNext("p0.t7.font", 1);
-    displNext("p0.t7.txt", "Er 108");
-  }
-  // ввывод уставки насос
-  displNext("p0.x4.val", Tepl2.getSetPump() / 10);
-  // ввывод уставки дополнительный обогреватель
-  displNext("p0.x6.val", Tepl2.getSetHeat() / 10);
-  // вывод уставки окно
-  displNext("p0.x7.val", Tepl2.getSetWindow() / 10);
-  // ввывод режима работы
-  if (Tepl2.getMode() == Teplica::MANUAL)
-    displNext("p0.t4.txt", "M");
-  if (Tepl2.getMode() == Teplica::AUTO)
-    displNext("p0.t4.txt", "A");
-  if (Tepl2.getMode() == Teplica::AIR)
-    displNext("p0.t4.txt", "W");
-  if (Tepl2.getMode() == Teplica::DECREASE_IN_HUMIDITY)
-    displNext("p0.t4.txt", "H");
-  // идикация состояния насоса
-  displNext("p0.p3.pic", Tepl2.getPump() ? 12 : 11);
-  // идикация состояния дополнительного обогревателя (задвижка)
-  displNext("p0.p4.pic", Tepl2.getHeat() && heat.getSatusHeat() ? 12 : 11);
-  // вывод уровня открытия окон
-  displNext("p0.h1.val", Tepl2.getLevel());
+  hmi.inditepl2(Tepl2, heat, mb1108a);
 }
 
 // вывод данных теплицы 3
 void indiTepl3()
 {
-  if (!mb1108a.getErrorMB1108A())
-  {
-    // ввывод температуры и ошибок датчика температуры
-    if (1 == Tepl3.getSensorStatus())
-    {
-      displNext("p0.t8.font", 5);
-      displNext("p0.t8.txt", String(Tepl3.getTemperature() / 100.0, 1));
-      if (Tepl3.getTemperature() < Tepl3.getSetHeat())
-        displNext("p0.t8.pco", BLUE);
-      else if (Tepl3.getTemperature() > Tepl3.getSetPump() + 300)
-        displNext("p0.t8.pco", RED);
-      else
-        displNext("p0.t8.pco", GREEN);
-    }
-    else
-    {
-      displNext("p0.t8.pco", LIGHT);
-      displNext("p0.t8.font", 1);
-      displNext("p0.t8.txt", "Er " + String(Tepl3.getSensorStatus(), HEX));
-    }
-  }
-  else
-  {
-    displNext("p0.t8.pco", RED);
-    displNext("p0.t8.font", 1);
-    displNext("p0.t8.txt", "Er 108");
-  }
-  // ввывод уставки насос
-  displNext("p0.x8.val", Tepl3.getSetPump() / 10);
-  // ввывод уставки дополнительный обогреватель
-  displNext("p0.x10.val", Tepl3.getSetHeat() / 10);
-  // вывод уставки окно
-  displNext("p0.x11.val", Tepl3.getSetWindow() / 10);
-  // ввывод режима работы
-  if (Tepl3.getMode() == Teplica::MANUAL)
-    displNext("p0.t5.txt", "M");
-  if (Tepl3.getMode() == Teplica::AUTO)
-    displNext("p0.t5.txt", "A");
-  if (Tepl3.getMode() == Teplica::AIR)
-    displNext("p0.t5.txt", "W");
-  if (Tepl3.getMode() == Teplica::DECREASE_IN_HUMIDITY)
-    displNext("p0.t5.txt", "H");
-  // индикация состояния насоса
-  // Tepl3.getPump() ? displNext("p0.p5.pic", 12) : displNext("p0.p5.pic", 11);
-  displNext("p0.p5.pic", Tepl3.getPump() ? 12 : 11);
-  // индикация состояния дополнительного обогревателя (задвижка)
-  // Tepl3.getHeat() && heat.getSatusHeat() ? displNext("p0.p6.pic", 12) : displNext("p0.p6.pic", 11);
-  displNext("p0.p6.pic", Tepl3.getHeat() && heat.getSatusHeat() ? 12 : 11);
-  // вывод уровня открытия окон
-  displNext("p0.h2.val", Tepl3.getLevel());
+  hmi.inditepl3(Tepl3, heat, mb1108a);
 }
 
 // вывод данных о работе дизельного обогревателя
 void indiGas()
 {
   // идикация состояния компрессора
-  displNext("p0.gm0.en", heat.getSatusHeat() ? 1 : 0);
+  hmi("gm0.en", heat.getSatusHeat() ? 1 : 0);
   // идикация состояния задвижек
-  displNext("p0.p8.pic", Tepl1.getHeat() ? 12 : 11);
-  displNext("p0.p9.pic", Tepl2.getHeat() ? 12 : 11);
-  displNext("p0.p10.pic", Tepl3.getHeat() ? 12 : 11);
+  hmi("p8.pic", heat.getStatusRelay(heat.getValve1()) ? 12 : 11);
+  hmi("p9.pic", heat.getStatusRelay(heat.getValve2()) ? 12 : 11);
+  hmi("p10.pic", heat.getStatusRelay(heat.getValve3()) ? 12 : 11);
 }
 
 // окно установок теплиц
 void pageNextion_p1(int i)
 {
-  if (coun1 < 2)
-  {
-    String err = "";
-    displNext("p1.x0.val", arr_Tepl[i]->getSetPump() / 10);
-    displNext("p1.x4.val", arr_Tepl[i]->getSetHeat() / 10);
-    displNext("p1.x1.val", arr_Tepl[i]->getHysteresis() / 10);
-    displNext("p1.x2.val", arr_Tepl[i]->getOpenTimeWindow());
-    displNext("p1.x3.val", arr_Tepl[i]->getSetWindow() / 10);
-    displNext("p1.h0.val", arr_Tepl[i]->getLevel());
-    displNext("p1.h1.val", arr_Tepl[i]->getHysteresis());
-    displNext("p1.h2.val", arr_Tepl[i]->getOpenTimeWindow());
-    displNext("p1.n0.val", arr_Tepl[i]->getLevel());
-    if (mb11016p.getError())
-      err = "MB16R: " + String(mb11016p.getError());
-    if (mbsl8di8ro.getError())
-      err += " MB16R_heat: " + String(mbsl8di8ro.getError());
-    if (mb1108a.getErrorMB1108A())
-      err += "  MB08A: " + String(mb1108a.getErrorMB1108A());
-    if (err.length())
-      displNext("g0.txt", err);
-    else
-      displNext("g0.txt", "Mb adress: " + String(IDSLAVE) + " | " + "\nRSSI: " + String(WiFi.RSSI()) + " | " + WiFi.localIP().toString());
-    coun1++;
-  }
-  displNext("b3.picc", arr_Tepl[i]->getPump() ? 2 : 1);
+  String err = "";
+  if (mb11016p.getError())
+    err = "MB16R: " + String(mb11016p.getError());
+  if (mbsl8di8ro.getError())
+    err += " MB16R_heat: " + String(mbsl8di8ro.getError());
+  if (mb1108a.getErrorMB1108A())
+    err += "  MB08A: " + String(mb1108a.getErrorMB1108A());
+  if (!err.length())
+    err = "Mb adress: " + String(IDSLAVE) + " | " + "\nRSSI: " + String(WiFi.RSSI()) + " | " + WiFi.localIP().toString();
 
-  switch (arr_Tepl[i]->getMode())
-  {
-  case Teplica::MANUAL:
-    displNext("b0.picc", 2);
-    displNext("b1.picc", 1);
-    displNext("b2.picc", 1);
-    break;
-  case Teplica::AUTO:
-    displNext("b0.picc", 1);
-    displNext("b1.picc", 1);
-    displNext("b2.picc", 1);
-    break;
-  case Teplica::AIR:
-    displNext("b0.picc", 1);
-    displNext("b1.picc", 2);
-    displNext("b2.picc", 1);
-    break;
-  case Teplica::DECREASE_IN_HUMIDITY:
-    displNext("b0.picc", 1);
-    displNext("b1.picc", 1);
-    displNext("b2.picc", 2);
-    break;
-  default:
-    break;
-  }
+  coun1++;
+  hmi.hmi_p1(*arr_Tepl[i], err, coun1);
 }
 
 void pageNextion_p2()
 {
-  if (coun1 < 3)
+  if (coun1 < 5)
   {
     String incStr = flash.getString("adr", "");
     pars_str_adr(incStr);
@@ -954,25 +732,25 @@ void pageNextion_p2()
     switch (flash.getInt("sspeed", 2400))
     {
     case 2400:
-      displNext("r4.val=1");
+      hmi("r4.val=1");
       break;
     case 9600:
-      displNext("r3.val=1");
+      hmi("r3.val=1");
       break;
     case 19200:
-      displNext("r5.val=1");
+      hmi("r5.val=1");
       break;
     }
     switch (flash.getInt("mspeed", 2400))
     {
     case 2400:
-      displNext("r0.val=1");
+      hmi("r0.val=1");
       break;
     case 9600:
-      displNext("r1.val=1");
+      hmi("r1.val=1");
       break;
     case 19200:
-      displNext("r2.val=1");
+      hmi("r2.val=1");
       break;
     }
     coun1++;
@@ -982,15 +760,10 @@ void pageNextion_p2()
 // вывод данных о работе дизельного обогревателя
 void pageNextion_p3()
 {
-  if (coun1 < 3)
+  if (coun1 < 5)
   {
-    displNext("p3.n0.val", flash.getInt("heat_adr", 102));
+    hmi("p3.n0.val", flash.getInt("heat_adr", 102));
     coun1++;
   }
-  // идикация состояния компрессора
-  displNext("gm0.en", heat.getSatusHeat() ? 1 : 0);
-  // идикация состояния задвижек
-  displNext("p8.pic", Tepl1.getHeat() ? 12 : 11);
-  displNext("p9.pic", Tepl2.getHeat() ? 12 : 11);
-  displNext("p10.pic", Tepl3.getHeat() ? 12 : 11);
+   indiGas();
 }

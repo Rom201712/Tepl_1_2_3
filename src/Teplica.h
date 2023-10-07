@@ -17,10 +17,8 @@ private:
     const uint32_t _WAITING_ON_PUMP = 300000;
     const uint AIRLEVEL = 20;
     MB11016P_ESP *__relay = nullptr;
-    // TypeMB16 *__relay = nullptr;
     MB1108A_ESP *__sensor = nullptr;
     Heat *__heat = nullptr;
-    // Sensor *__sensor;
     Window *__window = nullptr;
 
 public:

@@ -116,7 +116,7 @@ public:
             send("p0.t3.txt", "H");
         // идикация состояния насоса
         send("p0.p1.pic", tepl.getPump() ? 12 : 11);
-        // идикация состояния дополнительного обогревателя 
+        // идикация состояния дополнительного обогревателя
         send("p0.p2.pic", tepl.getHeat() && heat.getSatusHeat() ? 12 : 11);
         // вывод уровня открытия окон
         send("p0.h0.val", tepl.getLevel());
@@ -315,7 +315,82 @@ private:
         }
         return String(currentNo, HEX);
     }
+    void handle()
+    {
+        String response;
+        String messege;
+        String date;
+        int count_ff = 0;
+        bool charEquals = false;
+        unsigned long startTime = millis();
+        ((SoftwareSerial *)_nextionSerial)->listen(); // Start software serial listen
 
+        while (_nextionSerial->available())
+        {
+            int inc = _nextionSerial->read();
+            response.concat(checkHex(inc) + " ");
+            if (inc == 0x23)
+            {
+                messege.clear();
+                date.clear();
+                response.clear();
+                charEquals = false;
+            }
+            else if (inc == 0xff)
+            {
+                // response.clear();
+                count_ff++;
+            }
+            else if (inc == 0x66)
+            {
+                delay(3);
+                inc = _nextionSerial->read();
+                response.concat(checkHex(inc) + " ");
+                messege += String(inc, DEC);
+            }
+            else
+            {
+                if (inc <= MAX_ASCII && inc >= MIN_ASCII)
+                {
+                    if (!charEquals)
+                    {
+                        if (char(inc) == '=')
+                        {
+                            charEquals = true;
+                            date.clear();
+                        }
+                        else
+                        {
+                            messege += char(inc);
+                        }
+                    }
+                    else
+                    {
+                        date += char(inc);
+                    }
+                }
+            }
+            if (count_ff == 3 || inc == 0x0A)
+            {
+                if (_echo)
+                {
+                    Serial.println("\nOnEvent : [ M : " + messege + " | D : " + date + " | R : " + response + " ]");
+                }
+                listnerCallback(messege, date, response);
+                messege.clear();
+                response.clear();
+                date.clear();
+                count_ff = 0;
+                charEquals = false;
+            }
+            delay(3);
+
+            // if (millis() - startTime > CMD_READ_TIMEOUT)
+            //     return;
+        }
+    }
+
+    /*
     String handle()
     {
         String response;
@@ -378,7 +453,7 @@ private:
                         charEquals = false;
                     }
                 }
-                delay(10);
+                delay(3);
             }
             return response;
         }
@@ -408,4 +483,5 @@ private:
         Serial.flush();
         _nextionSerial->flush();
     }
+    */
 };

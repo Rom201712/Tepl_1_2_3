@@ -7,7 +7,7 @@ void setup()
 
   Serial.begin(115200);
   Serial.print(__DATE__);
-  hmi.echoEnabled(false);
+  hmi.echoEnabled(true);
   hmi.hmiCallBack(onHMIEvent);
 
   hmi("rest");
@@ -103,13 +103,13 @@ void setup()
 
   flash.begin("eerom", false);
   MbMasterSerial.begin(flash.getInt("mspeed", 19200), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
-  Serial2.begin(flash.getInt("sspeed", 19200));                                                 // Modbus Slave
-  SerialNextion.begin(38400, SWSERIAL_8N1, RXDNEX, TXDNEX, false);
+  MbSlaveSerial.begin(flash.getInt("sspeed", 19200));                                                 // Modbus Slave
+  SerialNextion.begin(19200, SWSERIAL_8N1, RXDNEX, TXDNEX, false);
 
   mbsl8di8ro.setAdress(flash.getInt("heat_adr", 102));
 
   String incStr;
-  slave.begin(&Serial2);
+  slave.begin(&MbSlaveSerial);
   slave.slave(IDSLAVE);
 
   slaveWiFi.slave(IDSLAVE);
@@ -204,7 +204,7 @@ void loop()
   saveOutModBusArr();
   slave.task();
   slaveWiFi.task();
-  // heat.update();
+  heat.update();
   controlScada();
   if (millis() > 10000)
     for (Teplica *t : arr_Tepl)
@@ -361,22 +361,6 @@ void onHMIEvent(String messege, String data, String response)
     return;
   }
 
-  // else if (messege == "val1") //
-  // {
-  //   heat.setRelay(heat.getValve1(), heat.getStatusRelay(heat.getValve1()) ? OFF : ON);
-  //   return;
-  // }
-  // else if (messege == "val2") //
-  // {
-  //   heat.setRelay(heat.getValve2(), heat.getStatusRelay(heat.getValve2()) ? OFF : ON);
-  //   return;
-  // }
-  // else if (messege == "val3") //
-  // {
-  //   heat.setRelay(heat.getValve3(), heat.getStatusRelay(heat.getValve3()) ? OFF : ON);
-  //   return;
-  // }
-
   // тестирование работы задвижек
   else if (messege == "tval1") //
   {
@@ -408,18 +392,18 @@ void onHMIEvent(String messege, String data, String response)
   else if (messege == "ss") // изменение скорости шины связи с терминалом
   {
     flash.putInt("sspeed", data.toInt());
-    Serial2.end();
-    Serial2.begin(data.toInt()); // Modbus Slave
+    MbSlaveSerial.end();
+    MbSlaveSerial.begin(data.toInt()); // Modbus Slave
     return;
   }
   else if (messege == "ms") // изменение скорости шины связи с контроллером реле и контроллером датчиков
   {
     flash.putInt("mspeed", data.toInt());
     MbMasterSerial.end();
-    MbMasterSerial.begin(flash.getInt("mspeed", 2400), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
+    MbMasterSerial.begin( data.toInt(), SERIAL_8N1, RXDMASTER, TXDMASTER, false); // Modbus Master
     return;
   }
-  else if (messege == "heat_adr") // изменение скорости шины связи с контроллером реле и контроллером датчиков
+  else if (messege == "heat_adr") // изменение адреса контроллера газового нагревателя
   {
     flash.putInt("heat_adr", data.toInt());
     mbsl8di8ro.setAdress(data.toInt());
@@ -532,11 +516,11 @@ void saveOutModBusArr()
     slaveWiFi.Ireg(WiFiOpenTimeWindow1 + i, t->getOpenTimeWindow());
     i += 17;
   }
-  slaveWiFi.Ireg(WiFiSoilSensorT1, soil1.getTemperature());
-  slaveWiFi.Ireg(WiFiSoilSensorH1, soil1.getHumidity());
-  slaveWiFi.Ireg(WiFiSoilSensorC1, soil1.getConductivity());
-  slaveWiFi.Ireg(WiFiSoilSensorS1, soil1.getSalinity());
-  slaveWiFi.Ireg(WiFiSoilSensorTDS1, soil1.getTDS());
+  slaveWiFi.Ireg(WiFiSoilSensorT2, soil1.getTemperature());
+  slaveWiFi.Ireg(WiFiSoilSensorH2, soil1.getHumidity());
+  slaveWiFi.Ireg(WiFiSoilSensorC2, soil1.getConductivity());
+  slaveWiFi.Ireg(WiFiSoilSensorS2, soil1.getSalinity());
+  slaveWiFi.Ireg(WiFiSoilSensorTDS2, soil1.getTDS());
 }
 
 void update_WiFiConnect(void *pvParameters)
@@ -712,7 +696,7 @@ void pageNextion_p1(int i)
   if (mb11016p.getError())
     err = "MB16R: " + String(mb11016p.getError());
   if (mbsl8di8ro.getError())
-    err += " MB16R_heat: " + String(mbsl8di8ro.getError());
+    err += " MBSL8di8ro: " + String(mbsl8di8ro.getError());
   if (mb1108a.getErrorMB1108A())
     err += "  MB08A: " + String(mb1108a.getErrorMB1108A());
   if (!err.length())

@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <ModbusRTU.h>
 
-#include <vector>
+// #include <vector>
 namespace Soil
 {
     const int LENG_MB = 6;
@@ -12,7 +12,7 @@ namespace Soil
     {
         humidity,     //  влажность почвы
         temperature,  //  температура почвы
-        conductivity, // EC почвы
+        conductivity, //  EC почвы
         salinity,     //  соленость почвы
         TDS,
         status
@@ -35,14 +35,14 @@ class SoilSensor
     std::vector<int> _tempvec;
     ModbusRTU *_mb_sensor;
 
-    uint32_t _baudRate = 4800;
+    uint32_t _baudRate = 9600;
     // std::vector<int> _humvec;
 
 public:
     static const uint NO_ERROR = 1;
     static const uint NO_POWER = 0xffff;
     SoilSensor() = default;
-    SoilSensor(ModbusRTU *mb_sensor, int adress, uint32_t baudRate = 4800) : _netadress(adress), _mb_sensor(mb_sensor), _baudRate(baudRate) {
+    SoilSensor(ModbusRTU *mb_sensor, int adress, uint32_t baudRate = 9600) : _netadress(adress), _mb_sensor(mb_sensor), _baudRate(baudRate) {
     }
     
     int getStatus()
@@ -78,7 +78,7 @@ public:
     {
         return _netadress;
     }
-    int getTempVector()
+    int getAverageTemperature()
     {
         int32_t T = 0;
         for (int i = 0; i < _tempvec.size(); i++)

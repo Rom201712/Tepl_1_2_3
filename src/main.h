@@ -34,6 +34,7 @@ AsyncWebServer server(80);
 #define RXDMASTER 25
 #define TXDMASTER 33
 #define MbMasterSerial Serial1
+#define MbSlaveSerial Serial2
 
 // цвет на экране
 const double LIGHT = 57048;
@@ -46,10 +47,10 @@ const double BLUE = 1566;
 const String VER = "Ver - 3.0. Date - " + String(__DATE__) + "\r";
 int IDSLAVE = 13; // адрес в сети Modbus
 
-// String ssid = "yastrebovka";
-// String password = "zerNo32_";
-String ssid = "Home-RP";
-String password = "12rp1974";
+String ssid = "yastrebovka";
+String password = "zerNo32_";
+// String ssid = "Home-RP";
+// String password = "12rp1974";
 
 const uint32_t AIRTIME = 1200000; // длительность проветривания и осушения
 
@@ -221,7 +222,7 @@ MB11016P_ESP mbsl8di8ro = MB11016P_ESP(&mb_master, 102, 0); // китайски�
 MB1108A_ESP mb1108a = MB1108A_ESP(&mb_master, 101, 3);
 Heat heat = Heat(0, 1, 2, 3, &mbsl8di8ro);
 
-SoilSensor soil1(&mb_master, 1);
+SoilSensor soil1(&mb_master, 1, 9600);
 
 Teplica Tepl1 = Teplica(1, 0, 0, heat.getValve1(), 1, 2, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat);
 Teplica Tepl2 = Teplica(2, 1, 4, heat.getValve2(), 5, 6, 900, 700, 11000, 60000, &mb1108a, &mb11016p, &heat);

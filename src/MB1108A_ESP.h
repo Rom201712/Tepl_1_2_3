@@ -26,8 +26,8 @@ class MB1108A_ESP
     const int DURATION_ = 120;                   // длительность истории, мин
     const int MAX_SIZE = 120 / PERIAD_SAVE_ + 1; // количество записей в памяти для отображения графика истории
     ModbusRTU *mb11008a_;
-    std::deque<std::vector<uint16_t>> deq_{};
-    std::vector<uint16_t> v_{};
+    std::deque<std::vector<int16_t>> deq_{};
+    std::vector<int16_t> v_{};
 
     void save_deq()
     {
@@ -61,7 +61,7 @@ public:
 return;
         if (!getErrorMB1108A())
         {
-            std::vector<uint16_t> v{};
+            std::vector<int16_t> v{};
             for (int i = 0; i < quantity_; i++)
             {
                 v.push_back(MB11108A::mb1108_[1 + i * quantity_]);
@@ -82,7 +82,7 @@ return;
         netadress_ = adr;
     }
 
-    std::deque<std::vector<uint16_t>> *getDeq()
+    std::deque<std::vector<int16_t>> *getDeq()
     {
         return &deq_;
     }
@@ -92,12 +92,12 @@ return;
         return MAX_SIZE;
     }
 
-    uint16_t getData(int index)
+    int16_t getData(int index)
     {
         return MB11108A::mb1108_[index];
     }
 
-    std::vector<uint16_t> *getback()
+    std::vector<int16_t> *getback()
     {
         return &v_;
     }

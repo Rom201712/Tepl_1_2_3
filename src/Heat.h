@@ -1,5 +1,4 @@
 // управление газовым нагревателем
-// #include <vector.h>
 
 #pragma once
 #include "Arduino.h"
@@ -13,8 +12,8 @@ private:
     unsigned long time_power_off_ = 0;
     const uint32_t TIME_WAITING_OFF_ = 900000;
     MB11016P_ESP *relay__;
-    std::vector<int> queleOn{0};
-    std::vector<int> queleOff{0};
+    std::vector<int> queleOn{};
+    std::vector<int> queleOff{};
 
 public:
     Heat(int relay_heat, int gate_valve1, int gate_valve2, int gate_valve3, MB11016P_ESP *mb11016p) : relay_heat_(relay_heat), gate_valve1_(gate_valve1),
@@ -52,6 +51,7 @@ public:
             queleOff.clear();
         }
     }
+
     void setRelay(int relay, int vol)
     {
         if (relay__->getRelay(relay) != vol)
@@ -81,7 +81,9 @@ public:
                     return;
                 }
                 relay__->setOff(relay);
+                
             }
+
     }
 // для тестирования работы задвижек
     void setTestRelay(int relay, int vol)
@@ -89,4 +91,12 @@ public:
         vol? relay__->setOn(relay): relay__->setOff(relay);    
     }
 
+    void printVector (std::vector<int> &vec)
+    {
+        for (auto v : vec)
+        {
+            Serial.printf("%d ", v);
+        }
+        Serial.println();
+    }
 };
